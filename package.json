@@ -1,0 +1,54 @@
+{
+  "name": "bypassfast",
+  "version": "0.1.0",
+  "description": "Official Node.js and TypeScript client for the Bypass Fast antibot-solving API (Akamai, Kasada, Incapsula, PerimeterX / HUMAN).",
+  "private": false,
+  "type": "module",
+  "main": "./dist/cjs/index.js",
+  "module": "./dist/esm/index.js",
+  "types": "./dist/cjs/index.d.ts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/esm/index.d.ts",
+        "default": "./dist/esm/index.js"
+      },
+      "require": {
+        "types": "./dist/cjs/index.d.ts",
+        "default": "./dist/cjs/index.js"
+      }
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "CHANGELOG.md"
+  ],
+  "sideEffects": false,
+  "engines": {
+    "node": ">=18.17"
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "test": "node --import tsx --test test/*.test.ts",
+    "typecheck": "tsc --noEmit",
+    "prepack": "npm run build"
+  },
+  "keywords": [
+    "bypassfast",
+    "akamai",
+    "kasada",
+    "incapsula",
+    "imperva",
+    "perimeterx",
+    "human",
+    "sdk"
+  ],
+  "homepage": "https://bypass.fast/docs",
+  "devDependencies": {
+    "@types/node": "^18.19.130",
+    "tsx": "^4.23.15",
+    "typescript": "~5.9.3"
+  }
+}
