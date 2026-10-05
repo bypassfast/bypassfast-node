@@ -3,14 +3,6 @@ import { isErrorCode, ValidationError } from "./errors.js";
 import type { RequestOptions, ResponseMeta } from "./types.js";
 import { always, base64, omitEmpty, requireObject, sha256Hex, toBytes, type Wire } from "./wire.js";
 
-/** Interaction families toggled in debug mode. */
-export interface AkamaiSensorConfig {
-  mouse?: boolean;
-  keyboard?: boolean;
-  touch?: boolean;
-  beta?: boolean;
-}
-
 /** `mode: "sensor"`: generate Bot Manager sensor_data. */
 export interface AkamaiSensorRequest {
   /** Full target URL of the next real request. */
@@ -31,15 +23,11 @@ export interface AkamaiSensorRequest {
   script_id?: string;
   /** URL the script was fetched from. */
   script_url: string;
-  /** Sent only when `debug` is true. */
-  config?: AkamaiSensorConfig;
   accept_language?: string;
   language?: string;
   timezone?: string;
   /** `session` from the previous sensor response of this flow. With a session, script and script_id are not sent. */
   session?: string;
-  device?: Record<string, unknown>;
-  debug?: boolean;
 }
 
 export interface AkamaiSensorResponse {
@@ -52,7 +40,6 @@ export interface AkamaiSensorResponse {
   session: string;
   language: string;
   script_id: string;
-  debug?: unknown;
   readonly response: ResponseMeta;
 }
 
@@ -80,10 +67,8 @@ export interface AkamaiSBSDRequest {
   language?: string;
   timezone?: string;
   uuid?: string;
-  device?: Record<string, unknown>;
   resource_urls?: string[];
   dom_resource_urls?: string[];
-  debug?: boolean;
 }
 
 export interface AkamaiSBSDResponse {
@@ -99,7 +84,6 @@ export interface AkamaiSBSDResponse {
   ind?: number;
   /** Wait this long before posting `body`. */
   wait_ms?: number;
-  debug?: unknown;
   readonly response: ResponseMeta;
 }
 
@@ -108,14 +92,12 @@ export interface AkamaiCPTRequest {
   token: string;
   /** 1 to 65536. */
   difficulty: number;
-  debug?: boolean;
 }
 
 export interface AkamaiCPTResponse {
   cost: number;
   success: boolean;
   answers: string[];
-  debug?: unknown;
   readonly response: ResponseMeta;
 }
 
@@ -131,7 +113,6 @@ export interface AkamaiSecCPTRequest {
   nonce: string;
   difficulty: number;
   count: number;
-  debug?: boolean;
 }
 
 export interface AkamaiSecCPTResponse {
@@ -140,7 +121,6 @@ export interface AkamaiSecCPTResponse {
   answers: string[];
   /** Exact body to POST to /_sec/verify?provider=<provider>. */
   body: string;
-  debug?: unknown;
   readonly response: ResponseMeta;
 }
 
@@ -202,21 +182,10 @@ export class AkamaiService {
         }
         omitEmpty(out, "script_id", scriptId);
         always(out, "script_url", request.script_url, "");
-        if (request.debug === true) {
-          const config = request.config ?? {};
-          out["config"] = {
-            mouse: config.mouse === true,
-            keyboard: config.keyboard === true,
-            touch: config.touch === true,
-            beta: config.beta === true,
-          };
-        }
         omitEmpty(out, "accept_language", request.accept_language);
         omitEmpty(out, "language", request.language);
         omitEmpty(out, "timezone", request.timezone);
         omitEmpty(out, "session", request.session);
-        omitEmpty(out, "device", request.device);
-        omitEmpty(out, "debug", request.debug);
         return out;
       };
 
@@ -276,10 +245,8 @@ export class AkamaiService {
       omitEmpty(wire, "language", request.language);
       omitEmpty(wire, "timezone", request.timezone);
       omitEmpty(wire, "uuid", request.uuid);
-      omitEmpty(wire, "device", request.device);
       omitEmpty(wire, "resource_urls", request.resource_urls);
       omitEmpty(wire, "dom_resource_urls", request.dom_resource_urls);
-      omitEmpty(wire, "debug", request.debug);
       const { meta, data } = await this.#core.solve("akamai", wire, call);
       return withResponse<AkamaiSBSDResponse>(data, meta);
     });
@@ -292,7 +259,6 @@ export class AkamaiService {
       const wire: Wire = { mode: "cpt" };
       always(wire, "token", request.token, "");
       always(wire, "difficulty", request.difficulty, 0);
-      omitEmpty(wire, "debug", request.debug);
       const { meta, data } = await this.#core.solve("akamai", wire, call);
       return withResponse<AkamaiCPTResponse>(data, meta);
     });
@@ -309,7 +275,6 @@ export class AkamaiService {
       always(wire, "nonce", request.nonce, "");
       always(wire, "difficulty", request.difficulty, 0);
       always(wire, "count", request.count, 0);
-      omitEmpty(wire, "debug", request.debug);
       const { meta, data } = await this.#core.solve("akamai", wire, call);
       return withResponse<AkamaiSecCPTResponse>(data, meta);
     });

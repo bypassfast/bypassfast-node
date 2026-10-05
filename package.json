@@ -23,7 +23,8 @@
   "files": [
     "dist",
     "README.md",
-    "CHANGELOG.md"
+    "CHANGELOG.md",
+    "LICENSE"
   ],
   "sideEffects": false,
   "engines": {
@@ -46,6 +47,15 @@
     "sdk"
   ],
   "homepage": "https://bypass.fast/docs",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/bypassfast/bypassfast-node.git"
+  },
+  "bugs": {
+    "url": "https://github.com/bypassfast/bypassfast-node/issues"
+  },
+  "license": "MIT",
+  "author": "Bypass Fast <support@bypass.fast> (https://bypass.fast)",
   "devDependencies": {
     "@types/node": "^18.19.130",
     "tsx": "^4.23.15",

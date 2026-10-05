@@ -18,7 +18,6 @@ export {
   type AkamaiSBSDResponse,
   type AkamaiSecCPTRequest,
   type AkamaiSecCPTResponse,
-  type AkamaiSensorConfig,
   type AkamaiSensorRequest,
   type AkamaiSensorResponse,
 } from "./akamai.js";

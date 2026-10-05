@@ -42,7 +42,7 @@ describe("akamai sensor", () => {
     assert.equal(compact?.["script_id"], sha256(script));
     assert.equal(fallback?.["script"], b64(script));
     for (const body of [upload, compact, fallback]) {
-      assert.ok(!("config" in (body ?? {})), "config is sent only in debug mode");
+      assert.ok(!("config" in (body ?? {})), "config is never sent");
     }
     assert.deepEqual(Object.keys(upload ?? {}), ["mode", "url", "ua", "abck", "bm_sz", "script", "script_id", "script_url"]);
   });
@@ -56,17 +56,6 @@ describe("akamai sensor", () => {
     assert.equal(body?.["script_id"], sha256(Buffer.from("var é = 1;", "utf8")));
     assert.equal(result.script_id, sha256(Buffer.from("var é = 1;", "utf8")), "local script_id fills a missing response field");
     assert.equal(akamaiScriptId("var é = 1;"), akamaiScriptId(Buffer.from("var é = 1;", "utf8")));
-  });
-
-  it("sends config only in debug mode, with all four flags", async () => {
-    const { fetch, requests } = fakeFetch(() => reply(200, { success: true, sensor_data: "sensor" }));
-    const { client } = testClient(fetch);
-    await client.akamai.sensor({ ...sensorBase, debug: true, config: { touch: true } });
-    await client.akamai.sensor({ ...sensorBase, debug: false, config: { touch: true } });
-    const [debug, plain] = requests.map((r) => r.json());
-    assert.deepEqual(debug?.["config"], { mouse: false, keyboard: false, touch: true, beta: false });
-    assert.equal(debug?.["debug"], true);
-    assert.ok(!("config" in (plain ?? {})) && !("debug" in (plain ?? {})));
   });
 
   it("tries an explicit script_id first and keeps the bytes for the fallback", async () => {
@@ -146,11 +135,10 @@ describe("akamai sensor", () => {
       script: "script",
       script_id: "garbage is not validated with a session",
       session: "prior",
-      device: {},
       accept_language: "en-US",
     });
     const body = requests[0]?.json() ?? {};
-    assert.ok(!("script" in body) && !("script_id" in body) && !("device" in body));
+    assert.ok(!("script" in body) && !("script_id" in body));
     assert.equal(body["session"], "prior");
     assert.equal(body["accept_language"], "en-US");
     assert.equal(result.script_id, undefined);

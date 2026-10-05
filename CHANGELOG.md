@@ -1,8 +1,8 @@
 # Changelog
 
-## 0.1.0
+## 0.1.0 - 2026-10-05
 
-First release of the Node.js / TypeScript SDK.
+First release of the Node.js / TypeScript SDK, licensed under the MIT License.
 
 - `BypassFast` client (also exported as `Client`) with `akamai.sensor`,
   `akamai.sbsd`, `akamai.cpt`, `akamai.secCpt`, `kasada.sensor`, `kasada.cd`,

@@ -253,4 +253,4 @@ Billed per successful (2xx) solve; see <https://bypass.fast/pricing>.
 
 ## License
 
-License: to be chosen by the maintainer before publishing.
+MIT. See [LICENSE](LICENSE).
