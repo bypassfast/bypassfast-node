@@ -84,6 +84,13 @@ In a new process, pass both `script_id` (saved from an earlier response, or
 `akamaiScriptId(scriptBytes)`) and `script` to try the compact form first.
 Calls with a `session` send neither field.
 
+A page posts its sensors seconds apart, and protected endpoints score a
+session whose sensors arrive a fraction of a second apart. Either wait
+2.5-4 s between the sensor calls of one session, or pass `pace: true` on
+them: the API then holds each continuation response until that interval
+has passed (never more than 6 s, never the first call), and the call simply
+takes longer.
+
 SBSD follows the same pattern: keep the `session` the first response returns
 and send it, with `script_id` in place of `script`, on every later post for
 that page.
