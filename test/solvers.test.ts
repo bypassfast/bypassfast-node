@@ -144,6 +144,15 @@ describe("akamai sensor", () => {
     assert.equal(result.script_id, undefined);
   });
 
+  it("sends pace only when set", async () => {
+    const { fetch, requests } = fakeFetch(() => reply(200, { success: true, session: "next" }));
+    const { client } = testClient(fetch);
+    await client.akamai.sensor({ ...sensorBase, session: "prior" });
+    await client.akamai.sensor({ ...sensorBase, session: "prior", pace: true });
+    assert.ok(!("pace" in (requests[0]?.json() ?? {})));
+    assert.equal(requests[1]?.json()["pace"], true);
+  });
+
   it("evicts the least recently used script after 256 others", async () => {
     const { fetch, requests } = fakeFetch(() => reply(200, { success: true }));
     const { client } = testClient(fetch);

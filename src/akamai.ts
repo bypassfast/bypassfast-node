@@ -28,6 +28,12 @@ export interface AkamaiSensorRequest {
   timezone?: string;
   /** `session` from the previous sensor response of this flow. With a session, script and script_id are not sent. */
   session?: string;
+  /**
+   * Hold the response until a person's interval (2.5-4 s) has passed since
+   * the previous sensor of this session. A page posts seconds apart, and
+   * sites score sessions whose sensors arrive a fraction of a second apart.
+   */
+  pace?: boolean;
 }
 
 export interface AkamaiSensorResponse {
@@ -186,6 +192,7 @@ export class AkamaiService {
         omitEmpty(out, "language", request.language);
         omitEmpty(out, "timezone", request.timezone);
         omitEmpty(out, "session", request.session);
+        omitEmpty(out, "pace", request.pace);
         return out;
       };
 

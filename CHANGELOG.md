@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Akamai: `pace` on `akamai.sensor` asks the API to hold each response
+  until a person's interval (2.5-4 s) has passed since the previous sensor.
+
 ## 0.1.0 - 2026-10-05
 
 First release of the Node.js / TypeScript SDK, licensed under the MIT License.
