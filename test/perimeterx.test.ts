@@ -46,6 +46,10 @@ describe("perimeterx", () => {
         body: "eyJhcHBJZCI6IlBYYWJjIn0=",
         body_base64: true,
       },
+      cookies: [
+        { name: "_abck", value: "a", domain: ".example.com", path: "/" },
+        { name: "_pxhd", value: "h" },
+      ],
     });
     assert.equal(hold.success, false);
     assert.equal(hold.rejected, true);
@@ -65,6 +69,10 @@ describe("perimeterx", () => {
     assert.deepEqual(holdWire, {
       mode: "holdcaptcha",
       proxy,
+      cookies: [
+        { name: "_abck", value: "a", domain: ".example.com", path: "/" },
+        { name: "_pxhd", value: "h" },
+      ],
       session: "sess-1",
       blocked: {
         url: "https://www.example.com/api/v1/availability",

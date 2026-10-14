@@ -71,6 +71,13 @@ export interface PerimeterxHoldRequest {
   ua?: string;
   /** Blocked request context (referer, origin), lower-case names. */
   headers?: Record<string, string>;
+  /**
+   * The cookies you hold for the site at the block (the set the blocked request carried, HUMAN's
+   * included). The solver lays them over its session jar so the hold runs with the site's current
+   * session and other protection layers, then returns only HUMAN's cookies and the ones the hold
+   * set or changed. Without them the solver refreshes the page itself before the hold.
+   */
+  cookies?: PerimeterxCookie[];
 }
 
 export interface PerimeterxRetryAdvice {
@@ -164,6 +171,7 @@ export class PerimeterxService {
       always(wire, "proxy", request.proxy, "");
       omitEmpty(wire, "ua", request.ua);
       omitEmpty(wire, "headers", request.headers);
+      omitEmpty(wire, "cookies", cookiesWire(request.cookies));
       omitEmpty(wire, "session", request.session);
       wire["blocked"] = blockedWire;
       return this.#solve(wire, call);

@@ -134,11 +134,13 @@ const init = await client.perimeterx.init({
   proxy: "http://user:pass@proxy.example.net:8000",
 });
 // Set every init.cookies entry and send your requests through the same proxy
-// with init.ua. If one comes back as a HUMAN block:
+// with init.ua. If one comes back as a HUMAN block, send it with the cookies
+// you hold for the site at that point (HUMAN's included):
 const hold = await client.perimeterx.solveHold({
   session: init.session,
   proxy: "http://user:pass@proxy.example.net:8000",
   blocked: { url: blockedUrl, method: "POST", status: 428, headers: blockedHeaders, body: blockedBody },
+  cookies: cookiesHeldAtTheBlock,
 });
 if (hold.rejected) {
   // Stop: a rejected hold is not an error, and it is billed.
