@@ -27,7 +27,7 @@ export interface PerimeterxInitRequest {
   ua?: string;
   /** Default "en-US,en;q=0.9". */
   accept_language?: string;
-  /** IANA zone matching the exit's region (default America/New_York). */
+  /** Ignored by the PerimeterX solver: it draws the session's zone from `accept_language`'s region. */
   timezone?: string;
   /** Default chrome-windows; must agree with `ua` when one is sent. */
   platform?: PerimeterxPlatform;
