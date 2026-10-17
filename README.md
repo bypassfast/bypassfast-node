@@ -100,9 +100,12 @@ A normal `200` page can run SBSD too: a first-party script whose URL carries
 it as part of the page, before any protected request: after the first sensor
 post, call `client.akamai.sbsd` with the sensor's `session` and `sbsd_o` set to
 the `bm_so` value, POST `{"body": ...}` to the script path without its query,
-continue the sensor with the `session` it returned, then ask for the two
-telemetry posts with `sbsd_post: "telemetry"` (wait `wait_ms`, or pass
-`pace: true`). The full order is on the
+continue the sensor with the `session` it returned, then, after the page's
+third sensor post, ask for the two telemetry posts with
+`sbsd_post: "telemetry"` (wait `wait_ms`, or pass `pace: true`). A refused
+telemetry call is a 409 whose `APIError.reason` says what to do: `no_input`
+means post the page's next sensor and ask again (waiting alone never makes it
+due), `complete` means send no more. The full order is on the
 [SBSD docs page](https://bypass.fast/docs/solvers/akamai/sbsd#inline-sbsd-on-a-normal-page).
 A client that skips it still gets a valid `_abck`, and the protected endpoint
 answers `403` instead.
