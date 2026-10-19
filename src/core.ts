@@ -414,7 +414,7 @@ function checkTimeout(field: string, value: number): number {
 }
 
 /** Validates the API origin and strips trailing slashes from its path. */
-export function normalizeBaseUrl(raw: string): string {
+function normalizeBaseUrl(raw: string): string {
   let url: URL;
   try {
     url = new URL(raw);
@@ -434,7 +434,7 @@ export function normalizeBaseUrl(raw: string): string {
 }
 
 /** localhost, 127.0.0.0/8, ::1 and IPv4-mapped 127.0.0.0/8. */
-export function isLoopbackHost(hostname: string): boolean {
+function isLoopbackHost(hostname: string): boolean {
   let host = hostname.toLowerCase();
   if (host.startsWith("[") && host.endsWith("]")) {
     host = host.slice(1, -1);
@@ -605,7 +605,7 @@ export function combineSignalsFallback(signals: AbortSignal[]): { signal: AbortS
 function noop(): void {}
 
 /** Waits `ms`, rejecting with the signal's reason if it aborts first. */
-export function sleep(ms: number, signal: AbortSignal | undefined): Promise<void> {
+function sleep(ms: number, signal: AbortSignal | undefined): Promise<void> {
   return new Promise((resolve, reject) => {
     if (signal?.aborted) {
       reject(signal.reason ?? new DOMException("This operation was aborted", "AbortError"));

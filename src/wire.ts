@@ -25,7 +25,7 @@ export function encodeJSON(value: unknown): string | undefined {
 }
 
 /** Go's omitempty: "", false, 0, null/undefined, empty arrays and empty objects are left out. */
-export function isEmpty(value: unknown): boolean {
+function isEmpty(value: unknown): boolean {
   if (value === undefined || value === null || value === "" || value === false || value === 0 || value === 0n) {
     return true;
   }
