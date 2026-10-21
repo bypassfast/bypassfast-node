@@ -7,6 +7,26 @@ const MiB = 1024 * 1024;
 const proxy = "socks5h://user:pass@proxy.example.net:1080";
 
 describe("perimeterx", () => {
+  it("adopts the Accept-Language the session runs as", async () => {
+    const drawn = "en-GB,en;q=0.9";
+    const { fetch, requests } = fakeFetch((request) =>
+      request.json()["accept_language"] === undefined
+        ? reply(200, { success: true, cookies: [], session: "s", ua: "UA", accept_language: drawn, cost: 0.004 })
+        : reply(200, { success: true, cookies: [], session: "s", ua: "UA", cost: 0.004 }),
+    );
+    const { client } = testClient(fetch, { compressionThreshold: -1 });
+
+    // None set: the wire omits it and the result carries the drawn value.
+    const drawnInit = await client.perimeterx.init({ url: "https://www.example.com/", proxy });
+    assert.equal(drawnInit.accept_language, drawn);
+    assert.equal("accept_language" in requests[0]!.json(), false);
+
+    // Set by the caller: sent, and kept even when the API does not echo it.
+    const own = await client.perimeterx.init({ url: "https://www.example.com/", proxy, accept_language: "tr-TR,tr;q=0.9" });
+    assert.equal(requests[1]!.json()["accept_language"], "tr-TR,tr;q=0.9");
+    assert.equal(own.accept_language, "tr-TR,tr;q=0.9");
+  });
+
   it("sends the init and holdcaptcha contracts", async () => {
     const { fetch, requests } = fakeFetch((request) =>
       request.json()["mode"] === "init"

@@ -25,9 +25,12 @@ export interface PerimeterxInitRequest {
   proxy: string;
   /** Desktop Chrome UA; omit it and the solver draws one and returns it as `ua`. */
   ua?: string;
-  /** Default "en-US,en;q=0.9". */
+  /**
+   * The Accept-Language your own requests send; the session keeps it. Omit it and the solver draws
+   * a real Chrome value for the proxy exit's country and returns it as `accept_language`.
+   */
   accept_language?: string;
-  /** Ignored by the PerimeterX solver: it draws the session's zone from `accept_language`'s region. */
+  /** Ignored by the PerimeterX solver: it takes the session's time zone from where the exit is. */
   timezone?: string;
   /** Default chrome-windows; must agree with `ua` when one is sent. */
   platform?: PerimeterxPlatform;
@@ -98,6 +101,11 @@ export interface PerimeterxResponse {
   retry?: PerimeterxRetryAdvice;
   /** The UA the session runs as; send every request of the session with it. */
   ua?: string;
+  /**
+   * The Accept-Language the session runs as; send every request of the session with it. When you
+   * sent none to init this is the value the solver drew for the exit's country.
+   */
+  accept_language?: string;
   cost: number;
   readonly response: ResponseMeta;
   /** `!success`. */
@@ -132,7 +140,9 @@ export class PerimeterxService {
       omitEmpty(wire, "headers", request.headers);
       omitEmpty(wire, "cookies", cookiesWire(request.cookies));
       omitEmpty(wire, "app_id", request.app_id);
-      return this.#solve(wire, call);
+      const result = await this.#solve(wire, call);
+      adoptAcceptLanguage(result, request.accept_language);
+      return result;
     });
   }
 
@@ -198,6 +208,20 @@ export class PerimeterxService {
       },
     });
     return withResponse<PerimeterxResponse>(data, meta);
+  }
+}
+
+/**
+ * Makes `accept_language` the value to send on every request of the session: the one the API
+ * returned (drawn for the exit's country when the caller set none), else the caller's own.
+ */
+function adoptAcceptLanguage(result: PerimeterxResponse, requested: string | undefined): void {
+  const returned = (result as { accept_language?: unknown }).accept_language;
+  if (typeof returned === "string" && returned !== "") {
+    return;
+  }
+  if (typeof requested === "string" && requested !== "") {
+    (result as { accept_language?: string }).accept_language = requested;
   }
 }
 
