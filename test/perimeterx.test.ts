@@ -115,6 +115,26 @@ describe("perimeterx", () => {
     assert.equal(result.ua, "Mozilla/5.0 Chrome/152.0.0.0");
   });
 
+  it("sends platform auto and returns the drawn platform and ua", async () => {
+    const { fetch, requests } = fakeFetch(() =>
+      reply(200, {
+        success: true,
+        cookies: [],
+        session: "sess-4",
+        ua: "Mozilla/5.0 (Macintosh) Chrome/155.0.0.0",
+        platform: "chrome-mac",
+        cost: 0.004,
+      }),
+    );
+    const { client } = testClient(fetch);
+    const result = await client.perimeterx.init({ url: "https://www.example.com/", proxy, platform: "auto" });
+    const body = requests[0]?.json() ?? {};
+    assert.equal(body["platform"], "auto");
+    assert.ok(!("ua" in body));
+    assert.equal(result.platform, "chrome-mac");
+    assert.equal(result.ua, "Mozilla/5.0 (Macintosh) Chrome/155.0.0.0");
+  });
+
   it("accepts body_encoding as on the wire, and a top-level url instead of blocked.url", async () => {
     const { fetch, requests } = fakeFetch(() => reply(200, { success: true, cookies: [], session: "s", cost: 0.004 }));
     const { client } = testClient(fetch);

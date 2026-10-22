@@ -3,8 +3,16 @@ import { ValidationError } from "./errors.js";
 import type { RequestOptions, ResponseMeta } from "./types.js";
 import { always, omitEmpty, requireObject, type Wire } from "./wire.js";
 
-/** Browser persona family. */
+/** Browser persona family a session runs as. */
 export type PerimeterxPlatform = "chrome-windows" | "chrome-mac";
+
+/**
+ * What `init` accepts for `platform`: a persona family, or `"auto"` to have the
+ * solver draw Windows or macOS and (when `ua` is omitted) a current Chrome major
+ * per session. Send `"auto"` only through exits that fit both Windows and macOS
+ * clients; pin the platform on an exit of one OS class.
+ */
+export type PerimeterxPlatformRequest = PerimeterxPlatform | "auto";
 
 /** A cookie to install before the page fetch, or one the solver holds. `expires` is Unix seconds, 0 for a session cookie. */
 export interface PerimeterxCookie {
@@ -32,8 +40,12 @@ export interface PerimeterxInitRequest {
   accept_language?: string;
   /** Ignored by the PerimeterX solver: it takes the session's time zone from where the exit is. */
   timezone?: string;
-  /** Default chrome-windows; must agree with `ua` when one is sent. */
-  platform?: PerimeterxPlatform;
+  /**
+   * Default chrome-windows; must agree with `ua` when one is sent. `"auto"` draws
+   * the platform (and, without `ua`, the Chrome major) per session; read the
+   * draw from the response's `platform` and `ua`.
+   */
+  platform?: PerimeterxPlatformRequest;
   referer?: string;
   /** Extra lower-case request headers for the page fetch. */
   headers?: Record<string, string>;
@@ -106,6 +118,8 @@ export interface PerimeterxResponse {
    * sent none to init this is the value the solver drew for the exit's country.
    */
   accept_language?: string;
+  /** The platform the session runs as; your client hints and TLS stack must match it. */
+  platform?: PerimeterxPlatform;
   cost: number;
   readonly response: ResponseMeta;
   /** `!success`. */

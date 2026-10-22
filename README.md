@@ -163,6 +163,11 @@ if (hold.rejected) {
 }
 ```
 
+`platform: "auto"` on `init` lets the API draw each session's platform
+(Windows or macOS) and Chrome version; `init.platform` and `init.ua` report
+the draw. Send `auto` only through exits that suit both Windows and macOS
+clients.
+
 `success: false` is a 2xx response, not an exception. `hold.rejected` and
 `hold.changeExit` are convenience getters. Set `blocked.body_encoding: "base64"`
 (or `body_base64: true`) for bodies that are not valid text. PerimeterX

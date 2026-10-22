@@ -42,6 +42,7 @@ export {
   type PerimeterxHoldRequest,
   type PerimeterxInitRequest,
   type PerimeterxPlatform,
+  type PerimeterxPlatformRequest,
   type PerimeterxResponse,
   type PerimeterxRetryAdvice,
 } from "./perimeterx.js";

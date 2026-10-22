@@ -7,6 +7,9 @@
   `accept_language` in the request the API draws a real Chrome value for the
   proxy exit's country; the SDK keeps your own value when you set one. Send
   every request of the session with `ua` and `accept_language`.
+- PerimeterX: `platform: "auto"` on `perimeterx.init` has the solver draw
+  each session's platform (Windows or macOS) and, without `ua`, a current
+  Chrome major; the response's new `platform` field reports the draw.
 - Akamai: `pace` on `akamai.sensor` asks the API to hold each response
   until a person's interval (2.5-4 s) has passed since the previous sensor.
 
