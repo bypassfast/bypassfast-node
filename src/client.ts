@@ -19,9 +19,10 @@ export interface Balance {
 const SOLVERS: readonly Solver[] = ["akamai", "kasada", "incapsula", "perimeterx"];
 
 /**
- * Bypass Fast API client. Create one per API key and reuse it: it holds the
- * script memory that lets repeated Akamai and Incapsula scripts travel as a
- * hash instead of the full body.
+ * Bypass Fast API client. Create one per API key and reuse it. Every
+ * challenge script (Akamai, Kasada, Incapsula) travels as its SHA-256 and is
+ * uploaded only when the API has never seen it; the client remembers recent
+ * misses so a burst of solves for a new script uploads it once.
  */
 export class BypassFast {
   /** Akamai Bot Manager: sensor, SBSD, CPT and sec-cpt. */

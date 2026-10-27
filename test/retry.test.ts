@@ -182,7 +182,8 @@ describe("retry loop", () => {
     ]) {
       const { fetch, requests } = scripted(response);
       const { client } = testClient(fetch, { retry: { maxRetries: 2 }, solverBusyRetryBudgetMs: 60_000 });
-      await assert.rejects(client.kasada.cd(cdRequest), APIError);
+      // Without a script body there is nothing to upload on a cache miss.
+      await assert.rejects(client.kasada.cd({ ...cdRequest, script: undefined }), APIError);
       assert.equal(requests.length, 1);
     }
   });

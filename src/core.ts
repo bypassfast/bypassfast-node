@@ -17,9 +17,10 @@ import {
   MAX_RETRY_DELAY_MS,
   MAX_TIMER_MS,
   SCRIPT_MEMORY_CAPACITY,
+  SCRIPT_MISS_MEMORY_MS,
   VERSION,
 } from "./constants.js";
-import { APIError, RequestError, ResponseError, ValidationError } from "./errors.js";
+import { APIError, isErrorCode, RequestError, ResponseError, ValidationError } from "./errors.js";
 import {
   decodeAPIError,
   fullJitter,
@@ -31,7 +32,7 @@ import {
 } from "./retry.js";
 import { ScriptMemory } from "./script-memory.js";
 import type { BypassFastOptions, FetchLike, RequestOptions, ResponseMeta, Solver } from "./types.js";
-import { encodeJSON } from "./wire.js";
+import { encodeJSON, type Wire } from "./wire.js";
 
 const gzipAsync = promisify(gzip);
 const gunzipAsync = promisify(gunzip);
@@ -76,13 +77,70 @@ interface Exchange {
   payload: Uint8Array;
 }
 
+/**
+ * One script-bearing solve. `build` renders the wire body with or without the
+ * script; `key` identifies the script in the client's miss memory; `hasScript`
+ * is false when the caller supplied only a script_id, in which case a cache
+ * miss is returned to the caller; `scriptBytes` is what the script adds to the
+ * body when sent.
+ */
+export interface ScriptExchange {
+  solver: Solver;
+  key: string;
+  hasScript: boolean;
+  scriptBytes: number;
+  build: (withScript: boolean) => Wire;
+}
+
 /** Transport, retry engine and script memory shared by one client's services. */
 export class Core {
-  readonly scripts = new ScriptMemory(SCRIPT_MEMORY_CAPACITY);
+  readonly scripts: ScriptMemory;
   readonly #config: Config;
 
   constructor(apiKey: string, options: BypassFastOptions | undefined) {
     this.#config = resolveConfig(apiKey, options);
+    this.scripts = new ScriptMemory(SCRIPT_MEMORY_CAPACITY, () => this.#config.now(), SCRIPT_MISS_MEMORY_MS);
+  }
+
+  /**
+   * Sends a script-bearing solve hash-first: the script's SHA-256 travels as
+   * `script_id` and the body only when the API has never seen that script
+   * (409 script_cache_miss, not billed), in one automatic resend. After one
+   * miss the body is sent directly for the same script until a
+   * script-bearing call succeeds, so a burst of solves for a brand-new script
+   * costs one extra round trip, not one per call.
+   */
+  async solveScript(exchange: ScriptExchange, call: Call): Promise<{ meta: ResponseMeta; data: Record<string, unknown> }> {
+    if (exchange.hasScript && exchange.scriptBytes > MAX_REQUEST_BYTES) {
+      throw new ValidationError("script", `encoded script exceeds the ${MAX_REQUEST_BYTES / (1024 * 1024)} MiB API limit`);
+    }
+    let withScript = exchange.hasScript && this.scripts.recentlyMissed(exchange.key);
+    let result: { meta: ResponseMeta; data: Record<string, unknown> };
+    try {
+      result = await this.solve(exchange.solver, exchange.build(withScript), call);
+    } catch (error) {
+      if (
+        !exchange.hasScript ||
+        withScript ||
+        !(isErrorCode(error, "script_cache_miss") || isErrorCode(error, "script_cache_unavailable"))
+      ) {
+        throw error;
+      }
+      this.scripts.markMissed(exchange.key);
+      const prior = error.response.attempts;
+      try {
+        result = await this.solve(exchange.solver, exchange.build(true), call);
+      } catch (fallbackError) {
+        addPriorAttempts(fallbackError, prior);
+        throw fallbackError;
+      }
+      result.meta.attempts += prior;
+      withScript = true;
+    }
+    if (withScript) {
+      this.scripts.markRegistered(exchange.key);
+    }
+    return result;
   }
 
   /** Runs one public method call with its cancellation scope. */

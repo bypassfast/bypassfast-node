@@ -45,15 +45,15 @@ promise.
 
 | Protection | Method | Returns |
 | --- | --- | --- |
-| Akamai Bot Manager | `client.akamai.sensor` | `sensor_data`, `session`, exact `ua` and `language`, `script_id` |
-| Akamai SBSD | `client.akamai.sbsd` | encrypted SBSD `body`, `session`, `script_id` |
+| Akamai Bot Manager | `client.akamai.sensor` | `sensor_data`, `session`, exact `ua` and `language`, `script_id`, `client_hints`, optional `telemetry` |
+| Akamai SBSD | `client.akamai.sbsd` | encrypted SBSD `body`, `session`, `script_id`, `client_hints` |
 | Akamai Sec-CPT | `client.akamai.cpt` | proof `answers` |
 | Akamai sec-cpt challenge page | `client.akamai.secCpt` | `answers` and the exact `/_sec/verify` `body` |
-| Kasada sensor | `client.kasada.sensor` | encrypted `payload`, `x-kpsdk-*` `headers`, `user_agent` |
-| Kasada CD | `client.kasada.cd` | `payload` for `x-kpsdk-cd` |
-| Incapsula Reese84 | `client.incapsula.reese84` | sensor `payload`, device `session` |
-| Incapsula UTMVC | `client.incapsula.utmvc` | `___utmvc` `cookie` and `submit_path` |
-| PerimeterX init | `client.perimeterx.init` | HUMAN `cookies` and an opaque `session` |
+| Kasada sensor | `client.kasada.sensor` | encrypted `payload`, `x-kpsdk-*` `headers`, `user_agent`, `client_hints`, `script_id` |
+| Kasada CD | `client.kasada.cd` | `payload` for `x-kpsdk-cd`, `script_id` |
+| Incapsula Reese84 | `client.incapsula.reese84` | sensor `payload`, device `session`, `script_id`, `client_hints` |
+| Incapsula UTMVC | `client.incapsula.utmvc` | `___utmvc` `cookie` and `submit_path`, `script_id` |
+| PerimeterX init | `client.perimeterx.init` | HUMAN `cookies`, an opaque `session`, `client_hints` |
 | PerimeterX hold | `client.perimeterx.solveHold` | `success`, refreshed `cookies`, retry advice |
 
 `client.balance()` reads the prepaid balance. `client.solve(solver, body)`
@@ -76,13 +76,12 @@ const sensor = await client.akamai.sensor({
 // call of the same flow.
 ```
 
-After a script succeeds, the client remembers its SHA-256 and later fresh
-sessions send only `script_id`. If the server-side entry has expired
-(`409 script_cache_miss`) or the cache is unavailable, the client resends the
-script once automatically; `result.response.attempts` counts both requests.
-In a new process, pass both `script_id` (saved from an earlier response, or
-`akamaiScriptId(scriptBytes)`) and `script` to try the compact form first.
-Calls with a `session` send neither field.
+The script travels as its SHA-256 and is uploaded once, only when the API has
+never seen it ([Script handling](#script-handling)); `result.response.attempts`
+counts both requests when that happens. Calls with a `session` send neither
+field. For sites that protect their API calls with an `Akamai-BM-Telemetry`
+header instead of a sensor post, pass `telemetry: true` and the result
+carries the ready-to-send header value in `telemetry`.
 
 A page posts its sensors seconds apart, and protected endpoints score a
 session whose sensors arrive a fraction of a second apart. Either wait
@@ -121,7 +120,9 @@ const cd = await client.kasada.cd({
 ```
 
 `seed` accepts a `bigint`, a safe-integer `number` or a decimal string and is
-sent as a JSON number, so the full unsigned 64-bit range survives.
+sent as a JSON number, so the full unsigned 64-bit range survives. The `p.js`
+source travels as its SHA-256 and is uploaded once, only when the API has
+never seen it ([Script handling](#script-handling)).
 
 ### Incapsula
 
@@ -137,9 +138,37 @@ const reese = await client.incapsula.reese84({
 // the next solve of the same browser session.
 ```
 
-The client remembers the SHA-256 for each mode and full `script_url`. An
-identical script at the same URL is sent as the URL alone; changed bytes are
-sent in full; a remote cache miss falls back to the full script automatically.
+The loader travels as its SHA-256 and is uploaded once, only when the API has
+never seen it ([Script handling](#script-handling)); `script_url` still
+identifies the loader family.
+
+### Script handling
+
+Every script-bearing call (`akamai.sensor`, `akamai.sbsd`, `kasada.sensor`,
+`kasada.cd`, `incapsula.reese84`, `incapsula.utmvc`) travels hash-first: the
+request carries the script's SHA-256 as `script_id` and no script. The API
+keeps every script it has been sent for days, so the body is only needed when
+nobody has sent that script yet; the API then answers `409 script_cache_miss`
+(not billed) and the SDK repeats the call once with the script. A new script
+version costs one extra round trip, once, fleet-wide: an Akamai sensor
+request is about 1 KB on the wire instead of hundreds of KB, a Kasada one
+about 1 KB instead of 700 KB. After a miss the client sends the script
+directly for a minute, so a burst of solves for a brand-new script uploads
+it once; `503 script_cache_unavailable` is retried first.
+
+Keep passing the script exactly as today. When it is not at hand, pass
+`script_id` instead (every script-bearing response returns it, and
+`scriptId(raw)` computes it); a cache miss is then thrown as the `APIError`.
+A script the API could never accept (over 1 MiB encoded) is refused locally
+as a `ValidationError` before any round trip.
+
+### Client hints
+
+Every solve returns `client_hints`: the UA client hints of the device the
+payload describes, as Chrome sends them. Send `sec-ch-ua`, `sec-ch-ua-mobile`
+and `sec-ch-ua-platform` on every request of the session, and the other
+hints (`sec-ch-ua-platform-version`, `sec-ch-ua-full-version-list`, ...)
+only to sites whose `Accept-CH` response header asks for them.
 
 ### PerimeterX / HUMAN
 

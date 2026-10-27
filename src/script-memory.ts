@@ -1,48 +1,68 @@
 /**
- * Least-recently-used map from cache keys to script SHA-256 digests. It
- * remembers only hashes, never script bodies, tokens, cookies or device data.
+ * Which script digests the API recently answered with `script_cache_miss`.
+ *
+ * Every script-bearing call travels hash-first. After one miss the client
+ * sends the script body straight away for the same digest, so a burst of
+ * solves for a brand-new script costs one extra round trip rather than one
+ * per call; a successful script-bearing call registers the script and forgets
+ * the miss. It remembers only digests and timestamps, never script bodies,
+ * tokens, cookies or device data.
  */
 export class ScriptMemory {
   readonly capacity: number;
-  readonly #entries = new Map<string, string>();
+  readonly ttlMs: number;
+  readonly #now: () => number;
+  readonly #missed = new Map<string, number>();
 
-  constructor(capacity: number) {
+  constructor(capacity: number, now: () => number, ttlMs: number) {
     this.capacity = capacity;
+    this.ttlMs = ttlMs;
+    this.#now = now;
   }
 
   get size(): number {
-    return this.#entries.size;
+    return this.#missed.size;
   }
 
-  /** True when `key` holds exactly `value`; a hit becomes the most recently used entry. */
-  matches(key: string, value: string): boolean {
-    const stored = this.#entries.get(key);
-    if (stored === undefined || value === "" || stored !== value) {
+  /** True when the API answered `script_cache_miss` for `key` within the memory window. */
+  recentlyMissed(key: string): boolean {
+    if (key === "") {
       return false;
     }
-    this.#entries.delete(key);
-    this.#entries.set(key, value);
+    const missedAt = this.#missed.get(key);
+    if (missedAt === undefined) {
+      return false;
+    }
+    if (this.#now() - missedAt >= this.ttlMs) {
+      this.#missed.delete(key);
+      return false;
+    }
     return true;
   }
 
-  /** Stores `value` as the most recently used entry, evicting the least recently used one when full. */
-  put(key: string, value: string): void {
-    if (key === "" || value === "") {
+  /** Records that the API has no script for `key`. */
+  markMissed(key: string): void {
+    if (key === "") {
       return;
     }
-    if (this.#entries.has(key)) {
-      this.#entries.delete(key);
-    } else if (this.#entries.size >= this.capacity) {
-      const oldest = this.#entries.keys().next();
+    if (this.#missed.has(key)) {
+      this.#missed.delete(key);
+    } else if (this.#missed.size >= this.capacity) {
+      const oldest = this.#missed.keys().next();
       if (oldest.done !== true) {
-        this.#entries.delete(oldest.value);
+        this.#missed.delete(oldest.value);
       }
     }
-    this.#entries.set(key, value);
+    this.#missed.set(key, this.#now());
   }
 
-  /** Whether `key` is present, without touching recency. */
+  /** Forgets a miss: a script-bearing call for `key` succeeded. */
+  markRegistered(key: string): void {
+    this.#missed.delete(key);
+  }
+
+  /** Whether a miss for `key` is recorded, expired or not. */
   has(key: string): boolean {
-    return this.#entries.has(key);
+    return this.#missed.has(key);
   }
 }

@@ -1,7 +1,7 @@
-import { addPriorAttempts, withResponse, type Core } from "./core.js";
-import { isErrorCode, ValidationError } from "./errors.js";
+import { withResponse, type Core } from "./core.js";
+import { ValidationError } from "./errors.js";
 import type { RequestOptions, ResponseMeta } from "./types.js";
-import { always, base64, omitEmpty, requireObject, sha256Hex, toBytes, type Wire } from "./wire.js";
+import { always, base64, base64Length, omitEmpty, requireObject, resolveScriptId, scriptId, toBytes, type Wire } from "./wire.js";
 
 /** `mode: "sensor"`: generate Bot Manager sensor_data. */
 export interface AkamaiSensorRequest {
@@ -14,12 +14,12 @@ export interface AkamaiSensorRequest {
   /** `bm_sz` cookie from the challenge response. */
   bm_sz: string;
   /**
-   * The sensor script: raw bytes, or a string sent as UTF-8. The SDK applies
-   * the base64 encoding the API requires and, after a successful call, sends
-   * only `script_id` for the same script (resending the bytes on a cache miss).
+   * The sensor script: raw bytes, or a string sent as UTF-8. The SDK sends
+   * only its SHA-256 as `script_id` and uploads the bytes (base64) once, only
+   * when the API has never seen that script.
    */
   script?: string | Uint8Array;
-  /** SHA-256 hex of the raw script, from an earlier response or `akamaiScriptId()`. */
+  /** SHA-256 hex of the raw script, from an earlier response or `scriptId()`; use it alone when the bytes are not at hand. */
   script_id?: string;
   /** URL the script was fetched from. */
   script_url: string;
@@ -34,6 +34,11 @@ export interface AkamaiSensorRequest {
    * sites score sessions whose sensors arrive a fraction of a second apart.
    */
   pace?: boolean;
+  /**
+   * Ask for the `Akamai-BM-Telemetry` header value too, for sites that protect
+   * their API calls with that header instead of a sensor post.
+   */
+  telemetry?: boolean;
 }
 
 export interface AkamaiSensorResponse {
@@ -46,13 +51,25 @@ export interface AkamaiSensorResponse {
   session: string;
   language: string;
   script_id: string;
+  /**
+   * The device's UA client hints. Send `sec-ch-ua`, `sec-ch-ua-mobile` and
+   * `sec-ch-ua-platform` on every request; the others only to sites whose
+   * Accept-CH header asks for them.
+   */
+  client_hints?: Record<string, string>;
+  /** The `Akamai-BM-Telemetry` header value, when `telemetry` was requested. */
+  telemetry?: string;
+  /** How long a paced response was held before answering, in ms. */
+  paced_ms?: number;
   readonly response: ResponseMeta;
 }
 
 /**
- * `mode: "sbsd"`: the encrypted side-band payload. Keep the `session` the first
- * response returns and send it on every later SBSD (or sensor) call for that
- * page; later calls may send `script_id` instead of `script`.
+ * `mode: "sbsd"`: the encrypted side-band payload. The script travels as its
+ * SHA-256 and is uploaded once on a cache miss, as for the sensor. Keep the
+ * `session` the first response returns and send it on every later SBSD (or
+ * sensor) call for that page; later calls may send `script_id` instead of
+ * `script`.
  */
 export interface AkamaiSBSDRequest {
   url: string;
@@ -84,6 +101,8 @@ export interface AkamaiSBSDResponse {
   body: string;
   session: string;
   script_id: string;
+  /** The device's UA client hints (see `AkamaiSensorResponse.client_hints`). */
+  client_hints?: Record<string, string>;
   /** "telemetry" on a telemetry response. */
   sbsd_post?: string;
   /** Which of the two telemetry posts this is. */
@@ -130,12 +149,10 @@ export interface AkamaiSecCPTResponse {
   readonly response: ResponseMeta;
 }
 
-/** The `script_id` of raw Akamai JavaScript: lower-case hex SHA-256 of its bytes. */
+/** The `script_id` of raw Akamai JavaScript; `scriptId()` under its original name. */
 export function akamaiScriptId(script: string | Uint8Array): string {
-  return sha256Hex(toBytes(script));
+  return scriptId(script);
 }
-
-const SHA256_HEX = /^[0-9a-f]{64}$/;
 
 /** Akamai Bot Manager: sensor, SBSD, CPT and sec-cpt. */
 export class AkamaiService {
@@ -147,37 +164,19 @@ export class AkamaiService {
   }
 
   /**
-   * Generates sensor_data. After a script-bearing call succeeds, later fresh
-   * sessions with the same script send only `script_id`; a remote cache miss
-   * resends the script once automatically.
+   * Generates sensor_data. A fresh session sends the script as its
+   * `script_id` and uploads the bytes once on a cache miss; a call that
+   * continues a `session` sends neither.
    */
   sensor(request: AkamaiSensorRequest, options?: RequestOptions): Promise<AkamaiSensorResponse> {
     return this.#core.run(options, async (call) => {
       requireObject(request);
-      const script = toBytes(request.script);
-      let scriptId = "";
-      let usedCompact = false;
-      let sendScript = false;
       // With a session the API already holds the script state: script and
       // script_id are not sent.
-      if (isEmptyString(request.session)) {
-        scriptId = (request.script_id ?? "").toLowerCase();
-        const explicit = scriptId !== "";
-        if (explicit && !SHA256_HEX.test(scriptId)) {
-          throw new ValidationError("script_id", "must be a 64-character SHA-256 hex digest");
-        }
-        if (script.length > 0) {
-          const computed = sha256Hex(script);
-          if (explicit && scriptId !== computed) {
-            throw new ValidationError("script_id", "does not match script bytes");
-          }
-          scriptId = computed;
-        }
-        usedCompact =
-          script.length > 0 && (explicit || this.#core.scripts.matches(`akamai:${scriptId}`, scriptId));
-        sendScript = script.length > 0 && !usedCompact;
-      }
-      const wire = (withScript: boolean): Wire => {
+      const fresh = isEmptyString(request.session);
+      const script = fresh ? toBytes(request.script) : new Uint8Array(0);
+      const id = fresh ? resolveScriptId(request.script_id, script) : "";
+      const build = (withScript: boolean): Wire => {
         const out: Wire = { mode: "sensor" };
         always(out, "url", request.url, "");
         always(out, "ua", request.ua, "");
@@ -186,44 +185,24 @@ export class AkamaiService {
         if (withScript) {
           out["script"] = base64(script);
         }
-        omitEmpty(out, "script_id", scriptId);
+        omitEmpty(out, "script_id", id);
         always(out, "script_url", request.script_url, "");
         omitEmpty(out, "accept_language", request.accept_language);
         omitEmpty(out, "language", request.language);
         omitEmpty(out, "timezone", request.timezone);
         omitEmpty(out, "session", request.session);
         omitEmpty(out, "pace", request.pace);
+        omitEmpty(out, "telemetry", request.telemetry);
         return out;
       };
-
-      let result: { meta: ResponseMeta; data: Record<string, unknown> };
-      try {
-        result = await this.#core.solve("akamai", wire(sendScript), call);
-      } catch (error) {
-        if (
-          !usedCompact ||
-          script.length === 0 ||
-          !(isErrorCode(error, "script_cache_miss") || isErrorCode(error, "script_cache_unavailable"))
-        ) {
-          throw error;
-        }
-        const prior = error.response.attempts;
-        try {
-          result = await this.#core.solve("akamai", wire(true), call);
-        } catch (fallbackError) {
-          addPriorAttempts(fallbackError, prior);
-          throw fallbackError;
-        }
-        result.meta.attempts += prior;
+      const { meta, data } = await this.#core.solveScript(
+        { solver: "akamai", key: `akamai:${id}`, hasScript: script.length > 0, scriptBytes: base64Length(script.length), build },
+        call,
+      );
+      if (isEmptyString(data["script_id"]) && id !== "") {
+        data["script_id"] = id;
       }
-      const data = result.data;
-      if (isEmptyString(data["script_id"]) && scriptId !== "") {
-        data["script_id"] = scriptId;
-      }
-      if (scriptId !== "") {
-        this.#core.scripts.put(`akamai:${scriptId}`, scriptId);
-      }
-      return withResponse<AkamaiSensorResponse>(data, result.meta);
+      return withResponse<AkamaiSensorResponse>(data, meta);
     });
   }
 
@@ -232,29 +211,38 @@ export class AkamaiService {
     return this.#core.run(options, async (call) => {
       requireObject(request);
       const script = toBytes(request.script);
-      const scriptId = (request.script_id ?? "").trim().toLowerCase();
-      if (script.length === 0 && scriptId === "") {
+      const id = resolveScriptId(request.script_id, script);
+      if (id === "") {
         throw new ValidationError("script", "set script, or script_id from an earlier response");
       }
-      const wire: Wire = { mode: "sbsd" };
-      always(wire, "url", request.url, "");
-      always(wire, "ua", request.ua, "");
-      if (script.length > 0) {
-        wire["script"] = base64(script);
+      const build = (withScript: boolean): Wire => {
+        const wire: Wire = { mode: "sbsd" };
+        always(wire, "url", request.url, "");
+        always(wire, "ua", request.ua, "");
+        if (withScript) {
+          wire["script"] = base64(script);
+        }
+        omitEmpty(wire, "script_id", id);
+        omitEmpty(wire, "session", request.session);
+        omitEmpty(wire, "sbsd_post", request.sbsd_post);
+        omitEmpty(wire, "pace", request.pace);
+        always(wire, "script_url", request.script_url, "");
+        always(wire, "sbsd_o", request.sbsd_o, "");
+        omitEmpty(wire, "accept_language", request.accept_language);
+        omitEmpty(wire, "language", request.language);
+        omitEmpty(wire, "timezone", request.timezone);
+        omitEmpty(wire, "uuid", request.uuid);
+        omitEmpty(wire, "resource_urls", request.resource_urls);
+        omitEmpty(wire, "dom_resource_urls", request.dom_resource_urls);
+        return wire;
+      };
+      const { meta, data } = await this.#core.solveScript(
+        { solver: "akamai", key: `akamai:${id}`, hasScript: script.length > 0, scriptBytes: base64Length(script.length), build },
+        call,
+      );
+      if (isEmptyString(data["script_id"])) {
+        data["script_id"] = id;
       }
-      omitEmpty(wire, "script_id", scriptId);
-      omitEmpty(wire, "session", request.session);
-      omitEmpty(wire, "sbsd_post", request.sbsd_post);
-      omitEmpty(wire, "pace", request.pace);
-      always(wire, "script_url", request.script_url, "");
-      always(wire, "sbsd_o", request.sbsd_o, "");
-      omitEmpty(wire, "accept_language", request.accept_language);
-      omitEmpty(wire, "language", request.language);
-      omitEmpty(wire, "timezone", request.timezone);
-      omitEmpty(wire, "uuid", request.uuid);
-      omitEmpty(wire, "resource_urls", request.resource_urls);
-      omitEmpty(wire, "dom_resource_urls", request.dom_resource_urls);
-      const { meta, data } = await this.#core.solve("akamai", wire, call);
       return withResponse<AkamaiSBSDResponse>(data, meta);
     });
   }

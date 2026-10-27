@@ -70,7 +70,7 @@ describe("real fetch over loopback", () => {
 
   it("sends Content-Length and gzip, and decodes a gzip response once", async () => {
     const client = new BypassFast("test-key", { baseUrl: apiUrl, userAgent: "loopback/1.0" });
-    const result = await client.kasada.sensor({ script: "var challenge = 1;".repeat(200), ua: "ua-in" });
+    const result = await client.kasada.sensor({ script: "var challenge = 1;", ua: "ua-in", referrer: "https://www.example.com/" + "path/".repeat(400) });
     assert.equal(result.payload, "cipher");
     assert.equal(result.response.requestId, "req-loopback");
 

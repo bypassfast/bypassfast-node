@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { describe, it } from "node:test";
-import { akamaiScriptId, APIError, ValidationError } from "../src/index.js";
+import { akamaiScriptId, APIError, scriptId, ValidationError } from "../src/index.js";
 import { cdRequest, fakeFetch, reply, testClient, type RecordedRequest } from "./helpers.js";
 
 const sha256 = (value: Uint8Array | string): string => createHash("sha256").update(value).digest("hex");
@@ -16,11 +16,19 @@ const sensorBase = {
 };
 
 describe("akamai sensor", () => {
-  it("uploads a script once, then sends only its script_id, and falls back on a cache miss", async () => {
+  it("sends the script as its hash, uploads it once on a miss, and is compact afterwards", async () => {
     const { fetch, requests } = fakeFetch((_request, index) =>
-      index === 1
+      index === 0
         ? reply(409, { error_code: "script_cache_miss" })
-        : reply(200, { cost: 0.002, success: true, sensor_data: "sensor", ua: "ua", session: "session", script_id: "server-id" }),
+        : reply(200, {
+            cost: 0.002,
+            success: true,
+            sensor_data: "sensor",
+            ua: "ua",
+            session: "session",
+            script_id: "server-id",
+            client_hints: { "sec-ch-ua": '"Chromium";v="155"', "sec-ch-ua-mobile": "?0" },
+          }),
     );
     const { client } = testClient(fetch, { compressionThreshold: -1 });
     const script = new TextEncoder().encode("raw <sensor> javascript");
@@ -29,33 +37,34 @@ describe("akamai sensor", () => {
     const first = await client.akamai.sensor(request);
     assert.equal(first.sensor_data, "sensor");
     assert.equal(first.script_id, "server-id");
-    assert.equal(first.response.attempts, 1);
+    assert.equal(first.response.attempts, 2);
+    assert.deepEqual(first.client_hints, { "sec-ch-ua": '"Chromium";v="155"', "sec-ch-ua-mobile": "?0" });
 
     const second = await client.akamai.sensor(request);
-    assert.equal(second.response.attempts, 2);
+    assert.equal(second.response.attempts, 1);
 
     assert.equal(requests.length, 3);
-    const [upload, compact, fallback] = requests.map((r) => r.json());
-    assert.equal(upload?.["script"], b64(script));
-    assert.equal(upload?.["script_id"], sha256(script));
+    const [compact, upload, again] = requests.map((r) => r.json());
     assert.ok(!("script" in (compact ?? {})));
     assert.equal(compact?.["script_id"], sha256(script));
-    assert.equal(fallback?.["script"], b64(script));
-    for (const body of [upload, compact, fallback]) {
+    assert.equal(upload?.["script"], b64(script));
+    assert.equal(upload?.["script_id"], sha256(script));
+    assert.ok(!("script" in (again ?? {})));
+    for (const body of [compact, upload, again]) {
       assert.ok(!("config" in (body ?? {})), "config is never sent");
     }
     assert.deepEqual(Object.keys(upload ?? {}), ["mode", "url", "ua", "abck", "bm_sz", "script", "script_id", "script_url"]);
   });
 
   it("treats a string script as UTF-8 bytes", async () => {
-    const { fetch, requests } = fakeFetch(() => reply(200, { success: true }));
+    const { fetch, requests } = fakeFetch((_request, index) => (index === 0 ? reply(409, { error_code: "script_cache_miss" }) : reply(200, { success: true })));
     const { client } = testClient(fetch);
     const result = await client.akamai.sensor({ ...sensorBase, script: "var é = 1;" });
-    const body = requests[0]?.json();
-    assert.equal(body?.["script"], b64(Buffer.from("var é = 1;", "utf8")));
-    assert.equal(body?.["script_id"], sha256(Buffer.from("var é = 1;", "utf8")));
-    assert.equal(result.script_id, sha256(Buffer.from("var é = 1;", "utf8")), "local script_id fills a missing response field");
-    assert.equal(akamaiScriptId("var é = 1;"), akamaiScriptId(Buffer.from("var é = 1;", "utf8")));
+    const digest = sha256(Buffer.from("var é = 1;", "utf8"));
+    assert.equal(requests[0]?.json()["script_id"], digest);
+    assert.equal(requests[1]?.json()["script"], b64(Buffer.from("var é = 1;", "utf8")));
+    assert.equal(result.script_id, digest, "local script_id fills a missing response field");
+    assert.equal(akamaiScriptId("var é = 1;"), scriptId(Buffer.from("var é = 1;", "utf8")));
   });
 
   it("tries an explicit script_id first and keeps the bytes for the fallback", async () => {
@@ -72,43 +81,64 @@ describe("akamai sensor", () => {
     assert.equal(requests[1]?.json()["script"], b64(script));
   });
 
+  it("returns the miss when only a script_id was given", async () => {
+    const { fetch, requests } = fakeFetch(() => reply(409, { error_code: "script_cache_miss" }));
+    const { client } = testClient(fetch);
+    await assert.rejects(client.akamai.sensor({ ...sensorBase, script_id: scriptId("not at hand") }), { code: "script_cache_miss" });
+    assert.equal(requests.length, 1);
+  });
+
   it("retries script_cache_unavailable before falling back, and merges attempts", async () => {
     const script = "var sensor = 1;";
     const { fetch, requests } = fakeFetch((_request, index) =>
-      index === 1 || index === 2
+      index === 0 || index === 1
         ? reply(503, { error_code: "script_cache_unavailable" })
         : reply(200, { success: true, sensor_data: "sensor" }),
     );
     const { client } = testClient(fetch, { retry: { maxRetries: 1, baseDelayMs: 0, maxDelayMs: 0 } });
-    await client.akamai.sensor({ ...sensorBase, script });
     const result = await client.akamai.sensor({ ...sensorBase, script });
     assert.equal(result.response.attempts, 3);
     const scripts = requests.map((r) => r.json()["script"] as string | undefined);
-    assert.deepEqual(scripts, [b64(script), undefined, undefined, b64(script)]);
+    assert.deepEqual(scripts, [undefined, undefined, b64(script)]);
   });
 
   it("adds the compact attempt to a failed fallback", async () => {
     const script = "var sensor = 2;";
     const { fetch } = fakeFetch((_request, index) =>
-      index === 0
-        ? reply(200, { success: true })
-        : index === 1
-          ? reply(409, { error_code: "script_cache_miss" })
-          : reply(422, { error_code: "unsupported_script" }),
+      index === 0 ? reply(409, { error_code: "script_cache_miss" }) : reply(422, { error_code: "unsupported_script" }),
     );
     const { client } = testClient(fetch);
-    await client.akamai.sensor({ ...sensorBase, script });
     const error = await client.akamai.sensor({ ...sensorBase, script }).catch((caught: unknown) => caught);
     assert.ok(error instanceof APIError);
     assert.equal(error.code, "unsupported_script");
     assert.equal(error.response.attempts, 2);
   });
 
-  it("does not fall back when the script was sent in full", async () => {
-    const { fetch, requests } = fakeFetch(() => reply(409, { error_code: "script_cache_miss" }));
-    const { client } = testClient(fetch);
-    await assert.rejects(client.akamai.sensor({ ...sensorBase, script: "x" }), { code: "script_cache_miss" });
-    assert.equal(requests.length, 1);
+  it("after a miss, sends the script directly for a minute, then hash-first again", async () => {
+    const { fetch, requests } = fakeFetch((_request, index) =>
+      index === 0 || index === 1 ? reply(409, { error_code: "script_cache_miss" }) : reply(200, { success: true }),
+    );
+    const { client, clock } = testClient(fetch);
+    const request = { ...sensorBase, script: "brand new script" };
+    // Hash-first misses and the upload misses too: the miss stays remembered.
+    await assert.rejects(client.akamai.sensor(request), { code: "script_cache_miss" });
+    // Inside the window the script travels directly, and registers.
+    const second = await client.akamai.sensor(request);
+    assert.equal(second.response.attempts, 1);
+    // Registered: hash-first again.
+    await client.akamai.sensor(request);
+    assert.deepEqual(
+      requests.map((r) => "script" in r.json()),
+      [false, true, true, false],
+    );
+    // An old miss is forgotten.
+    await assert.rejects(
+      testClient(fakeFetch(() => reply(409, { error_code: "script_cache_miss" })).fetch).client.akamai.sensor(request),
+      { code: "script_cache_miss" },
+    );
+    clock.now += 60_000;
+    await client.akamai.sensor(request);
+    assert.equal("script" in (requests.at(-1)?.json() ?? {}), false);
   });
 
   it("validates script_id locally", async () => {
@@ -116,14 +146,14 @@ describe("akamai sensor", () => {
     const { client } = testClient(fetch);
     await assert.rejects(
       client.akamai.sensor({ ...sensorBase, script: "script", script_id: "0".repeat(64) }),
-      (error: unknown) => error instanceof ValidationError && error.message === "bypassfast: invalid script_id: does not match script bytes",
+      (error: unknown) => error instanceof ValidationError && error.message === "bypassfast: invalid script_id: does not match the script bytes",
     );
     await assert.rejects(
       client.akamai.sensor({ ...sensorBase, script_id: "not-a-digest" }),
       (error: unknown) =>
         error instanceof ValidationError && error.message === "bypassfast: invalid script_id: must be a 64-character SHA-256 hex digest",
     );
-    await assert.rejects(client.akamai.sensor({ ...sensorBase, script_id: ` ${"a".repeat(64)}` }), ValidationError);
+    await assert.rejects(client.akamai.sensor({ ...sensorBase, script_id: ` ${"g".repeat(64)}` }), ValidationError);
     assert.equal(requests.length, 0);
   });
 
@@ -144,35 +174,42 @@ describe("akamai sensor", () => {
     assert.equal(result.script_id, undefined);
   });
 
-  it("sends pace only when set", async () => {
-    const { fetch, requests } = fakeFetch(() => reply(200, { success: true, session: "next" }));
+  it("sends pace and telemetry only when set, and reads the telemetry header back", async () => {
+    const { fetch, requests } = fakeFetch(() => reply(200, { success: true, session: "next", telemetry: "a=&&&e=bm&&&sensor_data=c2Vuc29y", paced_ms: 1200 }));
     const { client } = testClient(fetch);
-    await client.akamai.sensor({ ...sensorBase, session: "prior" });
-    await client.akamai.sensor({ ...sensorBase, session: "prior", pace: true });
+    const plain = await client.akamai.sensor({ ...sensorBase, session: "prior" });
+    const asked = await client.akamai.sensor({ ...sensorBase, session: "prior", pace: true, telemetry: true });
     assert.ok(!("pace" in (requests[0]?.json() ?? {})));
+    assert.ok(!("telemetry" in (requests[0]?.json() ?? {})));
     assert.equal(requests[1]?.json()["pace"], true);
+    assert.equal(requests[1]?.json()["telemetry"], true);
+    assert.equal(plain.telemetry, "a=&&&e=bm&&&sensor_data=c2Vuc29y");
+    assert.equal(asked.paced_ms, 1200);
   });
 
-  it("evicts the least recently used script after 256 others", async () => {
-    const { fetch, requests } = fakeFetch(() => reply(200, { success: true }));
+  it("remembers at most 256 misses", async () => {
+    const { fetch, requests } = fakeFetch(() => reply(409, { error_code: "script_cache_miss" }));
     const { client } = testClient(fetch);
-    await client.akamai.sensor({ ...sensorBase, script: "script-0" });
-    await client.akamai.sensor({ ...sensorBase, script: "script-0" });
-    assert.ok(!("script" in (requests[1]?.json() ?? {})), "remembered");
-    for (let i = 1; i <= 256; i++) {
-      await client.akamai.sensor({ ...sensorBase, script: `script-${i}` });
+    for (let i = 0; i <= 256; i++) {
+      await assert.rejects(client.akamai.sensor({ ...sensorBase, script: `script-${i}` }), { code: "script_cache_miss" });
     }
-    const before = requests.length;
-    await client.akamai.sensor({ ...sensorBase, script: "script-0" });
-    assert.equal(requests[before]?.json()["script"], b64("script-0"), "evicted, so uploaded again");
-    await client.akamai.sensor({ ...sensorBase, script: "script-256" });
-    assert.ok(!("script" in (requests[before + 1]?.json() ?? {})), "recent entries survive");
+    let before = requests.length;
+    await assert.rejects(client.akamai.sensor({ ...sensorBase, script: "script-256" }), { code: "script_cache_miss" });
+    assert.equal(requests[before]?.json()["script"], b64("script-256"), "a remembered miss sends the script directly");
+    assert.equal(requests.length, before + 1, "a direct upload that misses is not repeated");
+    before = requests.length;
+    await assert.rejects(client.akamai.sensor({ ...sensorBase, script: "script-0" }), { code: "script_cache_miss" });
+    assert.ok(!("script" in (requests[before]?.json() ?? {})), "the oldest miss was forgotten: hash-first again");
   });
 });
 
 describe("akamai sbsd, cpt and sec_cpt", () => {
-  it("sends the SBSD contract", async () => {
-    const { fetch, requests } = fakeFetch(() => reply(200, { success: true, body: "encrypted", ind: 1, wait_ms: 1200 }));
+  it("sends the SBSD contract hash-first and uploads the script on a miss", async () => {
+    const { fetch, requests } = fakeFetch((_request, index) =>
+      index === 0
+        ? reply(409, { error_code: "script_cache_miss" })
+        : reply(200, { success: true, body: "encrypted", ind: 1, wait_ms: 1200, client_hints: { "sec-ch-ua-mobile": "?0" } }),
+    );
     const { client } = testClient(fetch);
     const result = await client.akamai.sbsd({
       url: "https://www.example.com/",
@@ -186,21 +223,32 @@ describe("akamai sbsd, cpt and sec_cpt", () => {
     });
     assert.equal(result.body, "encrypted");
     assert.equal(result.wait_ms, 1200);
-    const body = requests[0]?.json() ?? {};
-    assert.deepEqual(Object.keys(body), ["mode", "url", "ua", "script", "sbsd_post", "pace", "script_url", "sbsd_o", "resource_urls"]);
-    assert.equal(body["mode"], "sbsd");
-    assert.equal(body["script"], b64("sbsd"));
+    assert.equal(result.response.attempts, 2);
+    assert.equal(result.script_id, sha256("sbsd"), "local script_id fills a missing response field");
+    assert.deepEqual(result.client_hints, { "sec-ch-ua-mobile": "?0" });
+    const compact = requests[0]?.json() ?? {};
+    assert.deepEqual(Object.keys(compact), ["mode", "url", "ua", "script_id", "sbsd_post", "pace", "script_url", "sbsd_o", "resource_urls"]);
+    assert.equal(compact["mode"], "sbsd");
+    assert.equal(compact["script_id"], sha256("sbsd"));
+    const upload = requests[1]?.json() ?? {};
+    assert.equal(upload["script"], b64("sbsd"));
+    assert.deepEqual(Object.keys(upload).slice(2, 5), ["ua", "script", "script_id"]);
   });
 
   it("accepts script_id instead of a script and requires one of them", async () => {
     const { fetch, requests } = fakeFetch(() => reply(200, { success: true }));
     const { client } = testClient(fetch);
-    await client.akamai.sbsd({ url: "u", ua: "ua", script_id: "  ABC  ", script_url: "s", sbsd_o: "o", session: "sess" });
-    assert.equal(requests[0]?.json()["script_id"], "abc");
+    const cached = scriptId("earlier");
+    await client.akamai.sbsd({ url: "u", ua: "ua", script_id: `  ${cached.toUpperCase()}  `, script_url: "s", sbsd_o: "o", session: "sess" });
+    assert.equal(requests[0]?.json()["script_id"], cached);
     assert.ok(!("script" in (requests[0]?.json() ?? {})));
     await assert.rejects(
       client.akamai.sbsd({ url: "u", ua: "ua", script_id: "   ", script_url: "s", sbsd_o: "o" }),
       (error: unknown) => error instanceof ValidationError && error.field === "script",
+    );
+    await assert.rejects(
+      client.akamai.sbsd({ url: "u", ua: "ua", script_id: "cached", script_url: "s", sbsd_o: "o" }),
+      (error: unknown) => error instanceof ValidationError && error.field === "script_id",
     );
     assert.equal(requests.length, 1);
   });
@@ -235,8 +283,12 @@ describe("akamai sbsd, cpt and sec_cpt", () => {
 });
 
 describe("kasada", () => {
-  it("sends the sensor contract with omitempty fields left out", async () => {
-    const { fetch, requests } = fakeFetch(() => reply(200, { payload: "p", headers: { "x-kpsdk-ct": "v" } }));
+  it("sends the sensor contract hash-first with omitempty fields left out", async () => {
+    const { fetch, requests } = fakeFetch((_request, index) =>
+      index === 0
+        ? reply(409, { error: "script_cache_miss" })
+        : reply(200, { payload: "p", headers: { "x-kpsdk-ct": "v" }, client_hints: { "sec-ch-ua-platform": '"Windows"' }, script_id: "srv" }),
+    );
     const { client } = testClient(fetch);
     const result = await client.kasada.sensor({
       script: "p.js",
@@ -248,7 +300,17 @@ describe("kasada", () => {
       now_ms: 0,
     });
     assert.deepEqual(result.headers, { "x-kpsdk-ct": "v" });
-    assert.deepEqual(requests[0]?.json(), { mode: "sensor", script: "p.js", ua: "ua", page_origin: "https://www.example.com" });
+    assert.deepEqual(result.client_hints, { "sec-ch-ua-platform": '"Windows"' });
+    assert.equal(result.script_id, "srv");
+    assert.equal(result.response.attempts, 2);
+    assert.deepEqual(requests[0]?.json(), { mode: "sensor", script_id: sha256("p.js"), ua: "ua", page_origin: "https://www.example.com" });
+    assert.deepEqual(requests[1]?.json(), { mode: "sensor", script: "p.js", script_id: sha256("p.js"), ua: "ua", page_origin: "https://www.example.com" });
+    // The upload registered the script: the CD call for the same p.js is compact at once.
+    const cd = await client.kasada.cd(cdRequest);
+    assert.equal(cd.response.attempts, 1);
+    assert.equal(cd.script_id, "srv");
+    assert.ok(!("script" in (requests[2]?.json() ?? {})));
+    assert.equal(requests[2]?.json()["script_id"], sha256("p.js"));
   });
 
   it("serializes seed as a bare uint64 JSON number", async () => {
@@ -284,8 +346,9 @@ describe("kasada", () => {
     const { client } = testClient(fetch);
     const result = await client.kasada.cd({ ...cdRequest, st: 0, work_time: 0, subchallenge_count: 2, is_mobile: false });
     assert.equal(result.duration_ms, 5);
+    assert.equal(result.script_id, sha256("p.js"));
     const body = requests[0]?.json() ?? {};
-    assert.deepEqual(Object.keys(body), ["mode", "script", "st", "ct", "domain", "work_time", "rst", "d", "id", "duration", "fc", "subchallenge_count"]);
+    assert.deepEqual(Object.keys(body), ["mode", "script_id", "st", "ct", "domain", "work_time", "rst", "d", "id", "duration", "fc", "subchallenge_count"]);
     assert.equal(body["st"], 0);
     assert.equal(body["work_time"], 0);
   });
@@ -301,28 +364,33 @@ describe("incapsula", () => {
     document_script_source_groups: [["https://www.example.com/static/build"]],
   };
 
-  it("omits a remembered script and resends it on a cache miss", async () => {
+  it("sends the script as its hash and uploads it once on a cache miss", async () => {
     const { fetch, requests } = fakeFetch((_request: RecordedRequest, index: number) =>
-      index === 1 ? reply(409, { error: "script_cache_miss" }) : reply(200, { payload: "payload", backend: "replay", duration_ms: 2 }),
+      index === 0 ? reply(409, { error: "script_cache_miss" }) : reply(200, { payload: "payload", backend: "replay", duration_ms: 2, client_hints: { "sec-ch-ua-mobile": "?0" } }),
     );
     const { client } = testClient(fetch, { compressionThreshold: -1 });
-    await client.incapsula.reese84(reese);
+    const first = await client.incapsula.reese84(reese);
     const result = await client.incapsula.reese84(reese);
-    assert.equal(result.response.attempts, 2);
+    assert.equal(first.response.attempts, 2);
+    assert.equal(first.script_id, sha256("raw script"));
+    assert.deepEqual(first.client_hints, { "sec-ch-ua-mobile": "?0" });
+    assert.equal(result.response.attempts, 1);
     assert.equal(result.backend, "replay");
     const bodies = requests.map((r) => r.json());
     assert.deepEqual(
       bodies.map((body) => body["script"]),
-      ["raw script", undefined, "raw script"],
+      [undefined, "raw script", undefined],
     );
     for (const body of bodies) {
       assert.equal(body["mode"], "reese84");
+      assert.equal(body["script_id"], sha256("raw script"));
       assert.equal(body["document_html"], reese.document_html);
       assert.deepEqual(body["document_script_source_groups"], reese.document_script_source_groups);
     }
-    assert.deepEqual(Object.keys(bodies[0] ?? {}), [
+    assert.deepEqual(Object.keys(bodies[1] ?? {}), [
       "mode",
       "script",
+      "script_id",
       "ua",
       "script_url",
       "url",
@@ -331,30 +399,30 @@ describe("incapsula", () => {
     ]);
   });
 
-  it("keys the memory by mode and script URL and resends changed scripts", async () => {
-    const { fetch, requests } = fakeFetch(() => reply(200, { payload: "p", backend: "b" }));
+  it("remembers a miss per mode and content", async () => {
+    const { fetch, requests } = fakeFetch((_request, index) => (index === 0 ? reply(409, { error: "script_cache_miss" }) : reply(200, { payload: "p", backend: "b" })));
     const { client } = testClient(fetch);
-    await client.incapsula.reese84(reese);
-    await client.incapsula.reese84({ ...reese, script: "changed script" });
-    await client.incapsula.utmvc({ script: "changed script", script_url: reese.script_url, url: reese.url, ua: "ua", session_ids: ["s1"] });
-    await client.incapsula.reese84({ ...reese, script: "changed script", script_url: "https://www.example.com/other" });
-    await client.incapsula.reese84({ ...reese, script: "changed script" });
+    await client.incapsula.reese84(reese); // miss, then upload
+    await client.incapsula.reese84(reese); // registered: compact
+    await client.incapsula.utmvc({ script: "raw script", script_url: reese.script_url, url: reese.url, ua: "ua", session_ids: ["s1"] }); // other mode: compact
+    await client.incapsula.reese84({ ...reese, script: "changed script" }); // other content: compact
     const bodies = requests.map((r) => r.json());
     assert.deepEqual(
       bodies.map((body) => body["script"]),
-      ["raw script", "changed script", "changed script", "changed script", undefined],
+      [undefined, "raw script", undefined, undefined, undefined],
     );
-    assert.equal(bodies[2]?.["mode"], "utmvc");
-    assert.deepEqual(bodies[2]?.["session_ids"], ["s1"]);
+    assert.equal(bodies[3]?.["mode"], "utmvc");
+    assert.deepEqual(bodies[3]?.["session_ids"], ["s1"]);
+    assert.equal(bodies[4]?.["script_id"], sha256("changed script"));
   });
 
-  it("does not remember scripts from failed calls", async () => {
-    const { fetch, requests } = fakeFetch((_request, index) =>
-      index === 0 ? reply(422, { error: "unsupported_challenge" }) : reply(200, { payload: "p" }),
-    );
+  it("returns a miss when only a script_id was given, and a failed upload", async () => {
+    const { fetch, requests } = fakeFetch(() => reply(409, { error: "script_cache_miss" }));
     const { client } = testClient(fetch);
-    await assert.rejects(client.incapsula.reese84(reese), { code: "unsupported_challenge" });
-    await client.incapsula.reese84(reese);
-    assert.equal(requests[1]?.json()["script"], "raw script");
+    const error = await client.incapsula.reese84(reese).catch((caught: unknown) => caught);
+    assert.ok(error instanceof APIError);
+    assert.equal(error.response.attempts, 2, "hash-first, then the upload");
+    await assert.rejects(client.incapsula.reese84({ ...reese, script: undefined, script_id: sha256("raw script") }), { code: "script_cache_miss" });
+    assert.equal(requests.length, 3);
   });
 });

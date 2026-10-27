@@ -9,6 +9,7 @@ export {
   ValidationError,
   type APIErrorDetails,
 } from "./errors.js";
+export { scriptId } from "./wire.js";
 export {
   akamaiScriptId,
   AkamaiService,

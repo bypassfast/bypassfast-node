@@ -102,6 +102,46 @@ export function sha256Hex(value: Uint8Array | string): string {
   return createHash("sha256").update(value).digest("hex");
 }
 
+/**
+ * The `script_id` of a raw challenge script: the lower-case hex SHA-256 of its
+ * bytes exactly as fetched (a string is encoded as UTF-8). The SDK computes it
+ * for every script it sends; call it to persist an ID beside a cached script.
+ */
+export function scriptId(script: string | Uint8Array): string {
+  return sha256Hex(toBytes(script));
+}
+
+const SHA256_HEX = /^[0-9a-f]{64}$/;
+
+/**
+ * Reconciles an explicit `script_id` with the script bytes: the bytes decide
+ * the ID, and an explicit ID that disagrees is a local validation error (the
+ * API would answer 400 script_id_mismatch). Returns "" when neither is given.
+ */
+export function resolveScriptId(explicit: unknown, script: Uint8Array): string {
+  const raw = explicit ?? "";
+  if (typeof raw !== "string") {
+    throw new ValidationError("script_id", "must be a string");
+  }
+  let id = raw.trim().toLowerCase();
+  if (id !== "" && !SHA256_HEX.test(id)) {
+    throw new ValidationError("script_id", "must be a 64-character SHA-256 hex digest");
+  }
+  if (script.length > 0) {
+    const computed = sha256Hex(script);
+    if (id !== "" && id !== computed) {
+      throw new ValidationError("script_id", "does not match the script bytes");
+    }
+    id = computed;
+  }
+  return id;
+}
+
+/** Length of the standard base64 encoding of `n` bytes. */
+export function base64Length(n: number): number {
+  return Math.ceil(n / 3) * 4;
+}
+
 /** Standard base64 with padding. */
 export function base64(value: Uint8Array): string {
   return Buffer.from(value.buffer, value.byteOffset, value.byteLength).toString("base64");

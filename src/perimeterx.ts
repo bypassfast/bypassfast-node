@@ -120,6 +120,12 @@ export interface PerimeterxResponse {
   accept_language?: string;
   /** The platform the session runs as; your client hints and TLS stack must match it. */
   platform?: PerimeterxPlatform;
+  /**
+   * The UA client hints the session sends: send `sec-ch-ua`, `sec-ch-ua-mobile`
+   * and `sec-ch-ua-platform` on every request of the session, and the others
+   * only to sites whose Accept-CH header asks for them.
+   */
+  client_hints?: Record<string, string>;
   cost: number;
   readonly response: ResponseMeta;
   /** `!success`. */

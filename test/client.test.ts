@@ -13,6 +13,7 @@ import {
   VERSION,
   type BypassFastOptions,
 } from "../src/index.js";
+import { scriptId } from "../src/wire.js";
 import { cdRequest, fakeFetch, hang, reply, testClient } from "./helpers.js";
 
 const MiB = 1024 * 1024;
@@ -138,7 +139,7 @@ describe("request construction", () => {
       "user-agent": `bypassfast-node/${VERSION} checkout/1.0`,
       "content-type": "application/json",
     });
-    assert.deepEqual(request.json(), { mode: "sensor", script: "p.js", ua: "ua-in", accept_language: "en-US" });
+    assert.deepEqual(request.json(), { mode: "sensor", script_id: scriptId("p.js"), ua: "ua-in", accept_language: "en-US" });
 
     assert.equal(result.payload, "cipher");
     assert.equal(result.user_agent, "ua-out");
@@ -149,13 +150,15 @@ describe("request construction", () => {
       serverTiming: "solve;dur=12",
       attempts: 1,
     });
-    // The metadata is non-enumerable: serializing a result reproduces the API body.
+    // The metadata is non-enumerable: serializing a result reproduces the API
+    // body (plus the script_id the client fills in when the API omits it).
     assert.ok(!Object.keys(result).includes("response"));
     assert.deepEqual(JSON.parse(JSON.stringify(result)), {
       cost: 0.002,
       payload: "cipher",
       user_agent: "ua-out",
       duration_ms: 12,
+      script_id: scriptId("p.js"),
     });
   });
 
@@ -169,8 +172,9 @@ describe("request construction", () => {
 
   it("gzip-compresses bodies at or above the threshold only when that saves bytes", async () => {
     const { fetch, requests } = fakeFetch(() => reply(200, {}));
-    const large = { script: "var challenge = 1;".repeat(200), ua: "ua", accept_language: "en-US" };
-    const medium = { script: "a".repeat(500), ua: "ua" };
+    // Scripts travel as their hash, so the referrer carries the bulk here.
+    const large = { script: "var challenge = 1;", ua: "ua", accept_language: "en-US", referrer: "https://www.example.com/" + "path/".repeat(400) };
+    const medium = { script: "p.js", ua: "ua", referrer: "a".repeat(400) };
 
     await testClient(fetch).client.kasada.sensor(large);
     assert.equal(requests[0]?.headers["content-encoding"], "gzip");
@@ -196,9 +200,18 @@ describe("request construction", () => {
     const { client } = testClient(fetch);
     const script = "x".repeat(MiB + 1);
 
+    // Hash-first would send a tiny body; the script itself can never be
+    // uploaded, so the typed methods refuse it up front.
     await assert.rejects(client.kasada.sensor({ script, ua: "ua" }), (error: unknown) => {
       assert.ok(error instanceof ValidationError);
-      assert.equal(error.field, "request");
+      assert.equal(error.field, "script");
+      assert.equal(error.message, "bypassfast: invalid script: encoded script exceeds the 1 MiB API limit");
+      return true;
+    });
+    // Akamai scripts grow by a third in base64.
+    await assert.rejects(client.akamai.sensor({ url: "u", ua: "ua", abck: "a", bm_sz: "b", script_url: "s", script: "x".repeat(MiB - 1000) }), ValidationError);
+    await assert.rejects(client.solve("kasada", { mode: "sensor", referrer: script }), (error: unknown) => {
+      assert.ok(error instanceof ValidationError);
       assert.equal(error.message, "bypassfast: invalid request: encoded JSON exceeds the 1 MiB API limit");
       return true;
     });

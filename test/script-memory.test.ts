@@ -3,52 +3,39 @@ import { describe, it } from "node:test";
 import { ScriptMemory } from "../src/script-memory.js";
 
 describe("ScriptMemory", () => {
-  it("matches only a stored, identical, non-empty value", () => {
-    const memory = new ScriptMemory(4);
-    assert.equal(memory.matches("k", "v"), false);
-    memory.put("k", "v");
-    assert.equal(memory.matches("k", "v"), true);
-    assert.equal(memory.matches("k", "other"), false);
-    assert.equal(memory.matches("k", ""), false);
+  it("remembers a miss until it is registered or expires", () => {
+    let now = 1_000;
+    const memory = new ScriptMemory(4, () => now, 60_000);
+    assert.equal(memory.recentlyMissed("k"), false);
+    memory.markMissed("k");
+    assert.equal(memory.recentlyMissed("k"), true);
+    memory.markRegistered("k");
+    assert.equal(memory.recentlyMissed("k"), false);
+    memory.markMissed("k");
+    now += 59_999;
+    assert.equal(memory.recentlyMissed("k"), true);
+    now += 1;
+    assert.equal(memory.recentlyMissed("k"), false, "expired");
+    assert.equal(memory.has("k"), false, "an expired miss is dropped on read");
   });
 
-  it("ignores empty keys and values", () => {
-    const memory = new ScriptMemory(4);
-    memory.put("", "v");
-    memory.put("k", "");
+  it("ignores empty keys", () => {
+    const memory = new ScriptMemory(4, () => 0, 60_000);
+    memory.markMissed("");
+    memory.markRegistered("");
     assert.equal(memory.size, 0);
+    assert.equal(memory.recentlyMissed(""), false);
   });
 
-  it("evicts the least recently used entry at capacity", () => {
-    const memory = new ScriptMemory(3);
-    memory.put("a", "1");
-    memory.put("b", "2");
-    memory.put("c", "3");
-    assert.equal(memory.matches("a", "1"), true, "a hit refreshes a");
-    memory.put("d", "4");
-    assert.equal(memory.has("b"), false, "b was least recently used");
+  it("evicts the oldest miss at capacity and refreshes a repeated one", () => {
+    const memory = new ScriptMemory(3, () => 0, 60_000);
+    memory.markMissed("a");
+    memory.markMissed("b");
+    memory.markMissed("c");
+    memory.markMissed("a"); // a becomes the newest
+    memory.markMissed("d");
+    assert.equal(memory.has("b"), false, "b was the oldest");
     assert.deepEqual(["a", "c", "d"].map((key) => memory.has(key)), [true, true, true]);
     assert.equal(memory.size, 3);
-  });
-
-  it("a mismatch does not refresh recency", () => {
-    const memory = new ScriptMemory(2);
-    memory.put("a", "1");
-    memory.put("b", "2");
-    assert.equal(memory.matches("a", "wrong"), false);
-    memory.put("c", "3");
-    assert.equal(memory.has("a"), false);
-    assert.equal(memory.has("b"), true);
-  });
-
-  it("put replaces a value and refreshes recency", () => {
-    const memory = new ScriptMemory(2);
-    memory.put("a", "1");
-    memory.put("b", "2");
-    memory.put("a", "1b");
-    memory.put("c", "3");
-    assert.equal(memory.has("b"), false);
-    assert.equal(memory.matches("a", "1b"), true);
-    assert.equal(memory.size, 2);
   });
 });

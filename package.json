@@ -1,6 +1,6 @@
 {
   "name": "bypassfast",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Official Node.js and TypeScript client for the Bypass Fast antibot-solving API (Akamai, Kasada, Incapsula, PerimeterX / HUMAN).",
   "private": false,
   "type": "module",

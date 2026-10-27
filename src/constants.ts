@@ -1,5 +1,5 @@
 /** Semantic version of this SDK; sent in the User-Agent header. */
-export const VERSION = "0.1.0";
+export const VERSION = "0.2.0";
 
 export const DEFAULT_BASE_URL = "https://api.bypass.fast";
 export const DEFAULT_COMPRESSION_THRESHOLD = 1024;
@@ -32,6 +32,8 @@ export const SOLVER_BUSY_RETRY_FLOOR_MS = 1_000;
 export const SOLVER_BUSY_RETRY_MAX_DELAY_MS = 10_000;
 
 export const SCRIPT_MEMORY_CAPACITY = 256;
+/** How long a script_cache_miss is remembered, during which the script body is sent directly. */
+export const SCRIPT_MISS_MEMORY_MS = 60_000;
 
 /** Largest delay a Node timer accepts without overflowing. */
 export const MAX_TIMER_MS = 2_147_483_647;

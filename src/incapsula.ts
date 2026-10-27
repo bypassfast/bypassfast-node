@@ -1,14 +1,16 @@
-import { addPriorAttempts, withResponse, type Call, type Core } from "./core.js";
-import { isErrorCode } from "./errors.js";
+import { withResponse, type Call, type Core } from "./core.js";
 import type { RequestOptions, ResponseMeta } from "./types.js";
-import { always, omitEmpty, requireObject, sha256Hex, type Wire } from "./wire.js";
+import { always, omitEmpty, requireObject, resolveScriptId, toBytes, type Wire } from "./wire.js";
 
 /**
- * `mode: "reese84"`. `script` is raw JavaScript; after a successful call the
- * client omits it for the same content at the same `script_url`.
+ * `mode: "reese84"`. `script` is raw JavaScript. It travels as its SHA-256
+ * (`script_id`) and is uploaded once, only when the API has never seen it;
+ * pass `script_id` instead when the source is not at hand.
  */
 export interface IncapsulaReese84Request {
-  script?: string;
+  script?: string | Uint8Array;
+  /** SHA-256 hex of the raw script, from an earlier response or `scriptId()`. */
+  script_id?: string;
   ua: string;
   /** Absolute URL this exact script was fetched from. */
   script_url: string;
@@ -26,9 +28,10 @@ export interface IncapsulaReese84Request {
   document_script_source_groups?: string[][];
 }
 
-/** `mode: "utmvc"`: the ___utmvc cookie workflow. */
+/** `mode: "utmvc"`: the ___utmvc cookie workflow. The script travels as its hash like Reese84. */
 export interface IncapsulaUTMVCRequest {
-  script?: string;
+  script?: string | Uint8Array;
+  script_id?: string;
   ua: string;
   script_url: string;
   url: string;
@@ -46,6 +49,14 @@ export interface IncapsulaResponse {
   backend: string;
   device_id?: string;
   session?: string;
+  /** Digest of the script the solve used. */
+  script_id?: string;
+  /**
+   * The device's UA client hints. Send `sec-ch-ua`, `sec-ch-ua-mobile` and
+   * `sec-ch-ua-platform` on every request; the others only to sites whose
+   * Accept-CH header asks for them.
+   */
+  client_hints?: Record<string, string>;
   duration_ms: number;
   cookie?: string;
   cookie_name?: string;
@@ -55,7 +66,8 @@ export interface IncapsulaResponse {
 
 interface IncapsulaWireInput {
   mode: "reese84" | "utmvc";
-  script?: string;
+  script?: string | Uint8Array;
+  script_id?: string;
   ua?: string;
   script_url?: string;
   url?: string;
@@ -87,6 +99,7 @@ export class IncapsulaService {
         {
           mode: "reese84",
           script: request.script,
+          script_id: request.script_id,
           ua: request.ua,
           script_url: request.script_url,
           url: request.url,
@@ -112,6 +125,7 @@ export class IncapsulaService {
         {
           mode: "utmvc",
           script: request.script,
+          script_id: request.script_id,
           ua: request.ua,
           script_url: request.script_url,
           url: request.url,
@@ -127,19 +141,15 @@ export class IncapsulaService {
   }
 
   async #solve(input: IncapsulaWireInput, call: Call): Promise<IncapsulaResponse> {
-    const script = input.script ?? "";
-    const cacheKey = `incapsula:${input.mode}:${input.script_url ?? ""}`;
-    let scriptHash = "";
-    let usedCompact = false;
-    if (script !== "") {
-      scriptHash = sha256Hex(script);
-      usedCompact = this.#core.scripts.matches(cacheKey, scriptHash);
-    }
-    const wire = (withScript: boolean): Wire => {
+    const script = toBytes(input.script);
+    const id = resolveScriptId(input.script_id, script);
+    const source = Buffer.from(script.buffer, script.byteOffset, script.byteLength).toString("utf8");
+    const build = (withScript: boolean): Wire => {
       const out: Wire = { mode: input.mode };
       if (withScript) {
-        omitEmpty(out, "script", script);
+        out["script"] = source;
       }
+      omitEmpty(out, "script_id", id);
       always(out, "ua", input.ua, "");
       always(out, "script_url", input.script_url, "");
       always(out, "url", input.url, "");
@@ -154,26 +164,13 @@ export class IncapsulaService {
       omitEmpty(out, "document_script_source_groups", input.document_script_source_groups);
       return out;
     };
-
-    let result: { meta: ResponseMeta; data: Record<string, unknown> };
-    try {
-      result = await this.#core.solve("incapsula", wire(!usedCompact), call);
-    } catch (error) {
-      if (!usedCompact || !(isErrorCode(error, "script_cache_miss") || isErrorCode(error, "script_cache_unavailable"))) {
-        throw error;
-      }
-      const prior = error.response.attempts;
-      try {
-        result = await this.#core.solve("incapsula", wire(true), call);
-      } catch (fallbackError) {
-        addPriorAttempts(fallbackError, prior);
-        throw fallbackError;
-      }
-      result.meta.attempts += prior;
+    const { meta, data } = await this.#core.solveScript(
+      { solver: "incapsula", key: `incapsula:${input.mode}:${id}`, hasScript: script.length > 0, scriptBytes: script.length, build },
+      call,
+    );
+    if ((data["script_id"] === undefined || data["script_id"] === null || data["script_id"] === "") && id !== "") {
+      data["script_id"] = id;
     }
-    if (scriptHash !== "") {
-      this.#core.scripts.put(cacheKey, scriptHash);
-    }
-    return withResponse<IncapsulaResponse>(result.data, result.meta);
+    return withResponse<IncapsulaResponse>(data, meta);
   }
 }
